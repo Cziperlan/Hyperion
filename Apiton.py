@@ -8,8 +8,8 @@ ROUTER = {
     "device_type": "cisco_ios",
     "host": "192.168.0.18",  # Replace with actual router IP
     "username": "admin",     # Replace with actual username
-    "password": "admin",  # Replace with actual password
-    "secret": "admin",  # Replace with enable secret if required
+    "password": "admin",     # Replace with actual password
+    "secret": "admin",       # Replace with enable secret if required
 }
 
 class CiscoGUI:
@@ -171,103 +171,103 @@ class CiscoGUI:
         self.output_area.delete(1.0, tk.END)
 
     def initialize_interfaces(self):
-        """Fetches available interfaces and populates the dropdown menu."""
         connection = self.connect_router()
         if connection:
             try:
                 output = connection.send_command("show ip interface brief")
                 interfaces = self.parse_interfaces(output)
                 self.update_interface_menu(interfaces)
+                if interfaces:
+                    self.selected_interface.set(interfaces[0])  # Default to the first interface
             except Exception as e:
                 messagebox.showerror("Interface Initialization Error", f"Failed to initialize interfaces: {e}")
             finally:
                 connection.disconnect()
 
     def parse_interfaces(self, output):
-        """Parses the output of 'show ip interface brief' to get interface names."""
         interfaces = []
         lines = output.splitlines()[1:]  # Skip the header line
         for line in lines:
             parts = line.split()
-            if parts:
-                interfaces.append(parts[0])  # First part is the interface name
+            if len(parts) > 1:
+                interfaces.append(parts[0])
         return interfaces
 
     def update_interface_menu(self, interfaces):
-        """Updates the dropdown menu with available interfaces."""
-        if interfaces:
-            self.selected_interface.set(interfaces[0])  # Set default to the first interface
-            menu = self.intf_menu["menu"]
-            menu.delete(0, "end")
-            for intf in interfaces:
-                menu.add_command(label=intf, command=lambda value=intf: self.selected_interface.set(value))
-        else:
-            self.selected_interface.set("No interfaces found")
+        menu = self.intf_menu["menu"]
+        menu.delete(0, "end")
+        for interface in interfaces:
+            menu.add_command(label=interface, command=lambda value=interface: self.selected_interface.set(value))
 
     def set_ip_address(self):
-        """Sets the IP address on the selected interface."""
         interface = self.selected_interface.get()
         ip_address = self.ip_entry.get()
         subnet_mask = self.mask_entry.get()
-        
-        if not interface or not ip_address or not subnet_mask:
-            messagebox.showwarning("Input Error", "Please select an interface, and enter both an IP address and a subnet mask.")
-            return
-        
-        commands = [
-            f"interface {interface}",
-            f"ip address {ip_address} {subnet_mask}",
-            "no shutdown",
-            "exit"
-        ]
-
-        # Execute the commands on the router
-        connection = self.connect_router()
-        if connection:
-            try:
-                output = connection.send_config_set(commands)
-                self.output_area.insert(tk.END, f"Configuring {interface} with IP {ip_address} and Subnet Mask {subnet_mask}:\n{output}\n\n")
-                messagebox.showinfo("Success", f"IP address and subnet mask set on {interface}")
-            except Exception as e:
-                messagebox.showerror("Configuration Error", f"Failed to set IP address: {e}")
-            finally:
-                connection.disconnect()
+        if interface and ip_address and subnet_mask:
+            connection = self.connect_router()
+            if connection:
+                try:
+                    connection.send_config_set([f"interface {interface}", f"ip address {ip_address} {subnet_mask}"])
+                    messagebox.showinfo("Success", f"IP address {ip_address} set on interface {interface}")
+                except Exception as e:
+                    messagebox.showerror("Configuration Error", f"Failed to set IP address: {e}")
+                finally:
+                    connection.disconnect()
 
     def configure_dhcp(self):
-        """Configures DHCP on the router based on user inputs."""
         pool_name = self.dhcp_pool_name_entry.get()
-        network_range = self.dhcp_network_entry.get()
+        network = self.dhcp_network_entry.get()
         subnet_mask = self.dhcp_subnet_mask_entry.get()
         gateway = self.dhcp_gateway_entry.get()
         dns = self.dhcp_dns_entry.get()
         
-        if not pool_name or not network_range or not subnet_mask or not gateway:
-            messagebox.showwarning("Input Error", "Please fill in all fields for the DHCP configuration. (DNS not needed)")
-            return
-        
-        # Construct DHCP configuration commands
-        commands = [
-            f"ip dhcp pool {pool_name}",
-            f"network {network_range} {subnet_mask}",
-            f"default-router {gateway}",
-            f"dns-server {dns}",
-            "exit"
-        ]
+        if pool_name and network and subnet_mask:
+            connection = self.connect_router()
+            if connection:
+                try:
+                    commands = [
+                        f"ip dhcp pool {pool_name}",
+                        f"network {network} {subnet_mask}",
+                        f"default-router {gateway}" if gateway else "",
+                        f"dns-server {dns}" if dns else "",
+                    ]
+                    connection.send_config_set(commands)
+                    messagebox.showinfo("DHCP Config", "DHCP configuration applied successfully")
+                except Exception as e:
+                    messagebox.showerror("DHCP Error", f"Failed to apply DHCP configuration: {e}")
+                finally:
+                    connection.disconnect()
 
-        # Execute the commands on the router
-        connection = self.connect_router()
-        if connection:
-            try:
-                output = connection.send_config_set(commands)
-                self.output_area.insert(tk.END, f"DHCP Pool {pool_name} Configuration:\n{output}\n\n")
-                messagebox.showinfo("Success", f"DHCP Pool {pool_name} configured successfully.")
-            except Exception as e:
-                messagebox.showerror("DHCP Configuration Error", f"Failed to configure DHCP: {e}")
-            finally:
-                connection.disconnect()
+class LoginWindow:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Login")
+
+        self.username_label = tk.Label(root, text="Username:")
+        self.username_label.grid(row=0, column=0, padx=10, pady=10)
+        self.username_entry = tk.Entry(root)
+        self.username_entry.grid(row=0, column=1, padx=10, pady=10)
+
+        self.password_label = tk.Label(root, text="Password:")
+        self.password_label.grid(row=1, column=0, padx=10, pady=10)
+        self.password_entry = tk.Entry(root, show="*")
+        self.password_entry.grid(row=1, column=1, padx=10, pady=10)
+
+        self.login_button = tk.Button(root, text="Login", command=self.check_login)
+        self.login_button.grid(row=2, column=1, padx=10, pady=10)
+
+    def check_login(self):
+        username = self.username_entry.get()
+        password = self.password_entry.get()
+        if username == "admin" and password == "admin":
+            self.root.withdraw()
+            main_root = tk.Toplevel(self.root)
+            app = CiscoGUI(main_root)
+        else:
+            messagebox.showerror("Login Error", "Invalid username or password")
 
 # Run the application
 if __name__ == "__main__":
     root = tk.Tk()
-    app = CiscoGUI(root)
+    login_app = LoginWindow(root)
     root.mainloop()

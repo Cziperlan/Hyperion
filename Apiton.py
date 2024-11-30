@@ -1,273 +1,199 @@
+from netmiko import ConnectHandler
 import tkinter as tk
-from tkinter import messagebox, scrolledtext, StringVar, Menu
 from tkinter import ttk
-from netmiko import ConnectHandler, NetmikoTimeoutException, NetmikoAuthenticationException
+from tkinter import messagebox
+import re
+import threading
 
-# Define the connection settings for the Cisco 7200 router
-ROUTER = {
-    "device_type": "cisco_ios",
-    "host": "192.168.0.18",  # Replace with actual router IP
-    "username": "admin",     # Replace with actual username
-    "password": "admin",     # Replace with actual password
-    "secret": "admin",       # Replace with enable secret if required
-}
+class DHCPPool:
+    def __init__(self, name, network, mask, dns=None):
+        self.name = name
+        self.network = network
+        self.mask = mask
+        self.dns = dns if dns else ""
 
-class CiscoGUI:
+class RouterConfigGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Cisco 7200 Router Manager - GNS3")
-
-        # Create a notebook (tabbed interface)
+        self.root.title("Cisco Router Configuration")
+        self.ssh_connection = None
+        
+        # Create notebook (tabbed interface)
         self.notebook = ttk.Notebook(root)
-        self.notebook.pack(fill=tk.BOTH, expand=True)
-
-        # Create the "Main" tab with router commands and interface configuration
-        self.main_tab = tk.Frame(self.notebook)
-        self.notebook.add(self.main_tab, text="Main")
-
-        # Create the "DHCP Configuration" tab
-        self.dhcp_tab = tk.Frame(self.notebook)
-        self.notebook.add(self.dhcp_tab, text="DHCP Configuration")
-
-        # Menu setup
-        self.menu = Menu(root)
-        self.root.config(menu=self.menu)
+        self.notebook.pack(fill='both', expand=True, padx=10, pady=5)
         
-        # Create a "File" menu with an exit option
-        self.file_menu = Menu(self.menu, tearoff=0)
-        self.menu.add_cascade(label="File", menu=self.file_menu)
-        self.file_menu.add_command(label="Exit", command=root.quit)
-
-        # Command section in the main tab
-        self.command_label = tk.Label(self.main_tab, text="Router Commands")
-        self.command_label.grid(row=0, column=0, padx=10, pady=5)
+        # Create tabs
+        self.connection_tab = ttk.Frame(self.notebook)
+        self.interface_tab = ttk.Frame(self.notebook)
+        self.dhcp_tab = ttk.Frame(self.notebook)
         
-        self.command_entry = tk.Entry(self.main_tab, width=40)
-        self.command_entry.grid(row=0, column=1, padx=10, pady=5)
+        self.notebook.add(self.connection_tab, text='Connection')
+        self.notebook.add(self.interface_tab, text='Interface Config')
+        self.notebook.add(self.dhcp_tab, text='DHCP')
         
-        self.run_button = tk.Button(self.main_tab, text="Run Command", command=self.run_command)
-        self.run_button.grid(row=0, column=2, padx=10, pady=5)
+        # Connection Frame
+        self.conn_frame = ttk.LabelFrame(self.connection_tab, text="SSH Connection", padding="10")
+        self.conn_frame.pack(fill='both', expand=True, padx=10, pady=5)
         
-        # Scrollable output area
-        self.output_area = scrolledtext.ScrolledText(self.main_tab, wrap=tk.WORD, width=60, height=20)
-        self.output_area.grid(row=1, column=0, columnspan=3, padx=10, pady=10)
+        # Connection inputs
+        ttk.Label(self.conn_frame, text="IP Address:").grid(row=0, column=0, sticky="w")
+        self.ip_entry = ttk.Entry(self.conn_frame)
+        self.ip_entry.grid(row=0, column=1, padx=5, pady=2)
         
-        # Common commands buttons
-        self.interface_button = tk.Button(self.main_tab, text="Show Interfaces", command=self.show_interfaces)
-        self.interface_button.grid(row=2, column=0, padx=10, pady=5)
-
-        self.route_button = tk.Button(self.main_tab, text="Show IP Route", command=self.show_ip_route)
-        self.route_button.grid(row=2, column=1, padx=10, pady=5)
-
-        self.clear_button = tk.Button(self.main_tab, text="Clear Output", command=self.clear_output)
-        self.clear_button.grid(row=2, column=2, padx=10, pady=5)
-
-        # Interface dropdown menu
-        self.intf_label = tk.Label(self.main_tab, text="Select Interface:")
-        self.intf_label.grid(row=3, column=0, padx=10, pady=5)
-
-        self.selected_interface = StringVar(self.main_tab)
-        self.intf_menu = tk.OptionMenu(self.main_tab, self.selected_interface, "Loading...")
-        self.intf_menu.grid(row=3, column=1, padx=10, pady=5)
-
-        # IP Address and Subnet Mask Entry
-        self.ip_label = tk.Label(self.main_tab, text="IP Address:")
-        self.ip_label.grid(row=4, column=0, padx=10, pady=5)
+        ttk.Label(self.conn_frame, text="Username:").grid(row=1, column=0, sticky="w")
+        self.username_entry = ttk.Entry(self.conn_frame)
+        self.username_entry.grid(row=1, column=1, padx=5, pady=2)
         
-        self.ip_entry = tk.Entry(self.main_tab, width=20)
-        self.ip_entry.grid(row=4, column=1, padx=10, pady=5)
+        ttk.Label(self.conn_frame, text="Password:").grid(row=2, column=0, sticky="w")
+        self.password_entry = ttk.Entry(self.conn_frame, show="*")
+        self.password_entry.grid(row=2, column=1, padx=5, pady=2)
         
-        self.mask_label = tk.Label(self.main_tab, text="Subnet Mask:")
-        self.mask_label.grid(row=5, column=0, padx=10, pady=5)
+        self.connect_btn = ttk.Button(self.conn_frame, text="Connect", command=self.connect_to_router)
+        self.connect_btn.grid(row=3, column=0, columnspan=2, pady=5)
         
-        self.mask_entry = tk.Entry(self.main_tab, width=20)
-        self.mask_entry.grid(row=5, column=1, padx=10, pady=5)
+        # Interface Frame
+        self.interface_frame = ttk.Frame(self.interface_tab, padding="10")
+        self.interface_frame.pack(fill='both', expand=True, padx=10, pady=5)
         
-        self.set_ip_button = tk.Button(self.main_tab, text="Set IP Address", command=self.set_ip_address)
-        self.set_ip_button.grid(row=6, column=1, padx=10, pady=5)
+        # Interface dropdown
+        self.interface_var = tk.StringVar()
+        self.interface_dropdown = ttk.Combobox(self.interface_frame, textvariable=self.interface_var)
+        self.interface_dropdown.grid(row=0, column=0, columnspan=2, padx=5, pady=2, sticky="ew")
+        self.interface_dropdown.bind('<<ComboboxSelected>>', self.on_interface_select)
+        
+        # IP Address configuration
+        ttk.Label(self.interface_frame, text="IP Address:").grid(row=1, column=0, sticky="w")
+        self.ip_addr_entry = ttk.Entry(self.interface_frame)
+        self.ip_addr_entry.grid(row=1, column=1, padx=5, pady=2)
+        
+        ttk.Label(self.interface_frame, text="Subnet Mask:").grid(row=2, column=0, sticky="w")
+        self.subnet_entry = ttk.Entry(self.interface_frame)
+        self.subnet_entry.grid(row=2, column=1, padx=5, pady=2)
+        
+        # Interface status checkbox
+        self.status_var = tk.BooleanVar()
+        self.status_check = ttk.Checkbutton(self.interface_frame, text="Interface Enabled", 
+                                          variable=self.status_var, command=self.toggle_interface_status)
+        self.status_check.grid(row=3, column=0, columnspan=2, pady=5)
+        
+        # Apply IP button
+        self.apply_btn = ttk.Button(self.interface_frame, text="Apply IP Configuration", 
+                                  command=self.apply_ip_config)
+        self.apply_btn.grid(row=4, column=0, columnspan=2, pady=5)
+        
+        # Initially disable interface configuration
+        self.set_interface_frame_state('disabled')
 
-        # Initialize interfaces in dropdown
-        self.initialize_interfaces()
+    def set_interface_frame_state(self, state):
+        """Enable or disable interface configuration widgets"""
+        for child in self.interface_frame.winfo_children():
+            child.configure(state=state)
 
-        # DHCP Configuration section (in the DHCP tab)
-        self.dhcp_pool_name_label = tk.Label(self.dhcp_tab, text="DHCP Pool Name:")
-        self.dhcp_pool_name_label.grid(row=0, column=0, padx=10, pady=5)
-        self.dhcp_pool_name_entry = tk.Entry(self.dhcp_tab, width=20)
-        self.dhcp_pool_name_entry.grid(row=0, column=1, padx=10, pady=5)
-        
-        self.dhcp_network_label = tk.Label(self.dhcp_tab, text="Network Range:")
-        self.dhcp_network_label.grid(row=1, column=0, padx=10, pady=5)
-        self.dhcp_network_entry = tk.Entry(self.dhcp_tab, width=20)
-        self.dhcp_network_entry.grid(row=1, column=1, padx=10, pady=5)
-        
-        self.dhcp_subnet_mask_label = tk.Label(self.dhcp_tab, text="Subnet Mask:")
-        self.dhcp_subnet_mask_label.grid(row=2, column=0, padx=10, pady=5)
-        self.dhcp_subnet_mask_entry = tk.Entry(self.dhcp_tab, width=20)
-        self.dhcp_subnet_mask_entry.grid(row=2, column=1, padx=10, pady=5)
-
-        self.dhcp_gateway_label = tk.Label(self.dhcp_tab, text="Default Gateway:")
-        self.dhcp_gateway_label.grid(row=3, column=0, padx=10, pady=5)
-        self.dhcp_gateway_entry = tk.Entry(self.dhcp_tab, width=20)
-        self.dhcp_gateway_entry.grid(row=3, column=1, padx=10, pady=5)
-        
-        self.dhcp_dns_label = tk.Label(self.dhcp_tab, text="DNS Server:")
-        self.dhcp_dns_label.grid(row=4, column=0, padx=10, pady=5)
-        self.dhcp_dns_entry = tk.Entry(self.dhcp_tab, width=20)
-        self.dhcp_dns_entry.grid(row=4, column=1, padx=10, pady=5)
-
-        # Button to apply DHCP settings
-        self.dhcp_configure_button = tk.Button(self.dhcp_tab, text="Apply DHCP Configuration", command=self.configure_dhcp)
-        self.dhcp_configure_button.grid(row=5, column=1, padx=10, pady=10)
-
-    def connect_router(self):
+    def connect_to_router(self):
+        """Establish SSH connection to the router"""
         try:
-            connection = ConnectHandler(**ROUTER)
-            connection.enable()
-            return connection
-        except NetmikoTimeoutException:
-            messagebox.showerror("Connection Error", "Connection to router timed out.")
-        except NetmikoAuthenticationException:
-            messagebox.showerror("Authentication Error", "Authentication failed. Check username and password.")
+            device = {
+                'device_type': 'cisco_ios',
+                'ip': self.ip_entry.get(),
+                'username': self.username_entry.get(),
+                'password': self.password_entry.get(),
+                'secret': self.password_entry.get()  # Using the same password for enable secret
+            }
+            
+            self.ssh_connection = ConnectHandler(**device)
+            self.ssh_connection.enable()  # Enter enable mode
+            messagebox.showinfo("Success", "Connected to router successfully!")
+            
+            # Get and populate interfaces
+            self.get_interfaces()
+            self.set_interface_frame_state('normal')
+            
+            # Switch to interface tab
+            self.notebook.select(1)
+            
         except Exception as e:
-            messagebox.showerror("Connection Error", f"Failed to connect to router: {e}")
-        return None
+            messagebox.showerror("Error", f"Failed to connect: {str(e)}")
 
-    def run_command(self):
-        command = self.command_entry.get()
-        if command:
-            connection = self.connect_router()
-            if connection:
-                try:
-                    output = connection.send_command(command)
-                    self.output_area.insert(tk.END, f"> {command}\n{output}\n\n")
-                except Exception as e:
-                    messagebox.showerror("Command Error", f"Failed to execute command: {e}")
-                finally:
-                    connection.disconnect()
+    def get_interfaces(self):
+        """Get available interfaces from router"""
+        if self.ssh_connection:
+            output = self.ssh_connection.send_command("show ip interface brief")
+            # Filter out interface names only
+            interfaces = [line.split()[0] for line in output.splitlines()[1:] 
+                        if line.strip() and not line.startswith("Interface")]
+            self.interface_dropdown['values'] = interfaces
 
-    def show_interfaces(self):
-        connection = self.connect_router()
-        if connection:
+    def on_interface_select(self, event):
+        """Handle interface selection"""
+        if self.ssh_connection and self.interface_var.get():
+            interface = self.interface_var.get()
+            # Get interface status
+            output = self.ssh_connection.send_command(f"show ip interface {interface}")
+            
+            # Update status checkbox
+            if "administratively down" in output:
+                self.status_var.set(False)
+            else:
+                self.status_var.set(True)
+                
+            # Get IP address and subnet if configured
+            ip_match = re.search(r"Internet address is (\d+\.\d+\.\d+\.\d+)/(\d+)", output)
+            if ip_match:
+                self.ip_addr_entry.delete(0, tk.END)
+                self.ip_addr_entry.insert(0, ip_match.group(1))
+                # Convert CIDR to subnet mask
+                mask_bits = int(ip_match.group(2))
+                mask = '.'.join([str((0xffffffff << (32 - mask_bits) >> i) & 0xff) 
+                               for i in [24, 16, 8, 0]])
+                self.subnet_entry.delete(0, tk.END)
+                self.subnet_entry.insert(0, mask)
+
+    def toggle_interface_status(self):
+        """Toggle interface administrative status"""
+        if self.ssh_connection and self.interface_var.get():
+            interface = self.interface_var.get()
+            status = "no shutdown" if self.status_var.get() else "shutdown"
+            
+            # Execute in separate thread to avoid GUI freezing
+            thread = threading.Thread(target=self._apply_interface_status, 
+                                   args=(interface, status))
+            thread.start()
+
+    def _apply_interface_status(self, interface, status):
+        """Apply interface status change"""
+        try:
+            commands = [
+                f"interface {interface}",
+                status
+            ]
+            self.ssh_connection.config_mode()
+            self.ssh_connection.send_config_set(commands)
+            self.ssh_connection.exit_config_mode()
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to change interface status: {str(e)}")
+
+    def apply_ip_config(self):
+        """Apply IP address configuration to interface"""
+        if self.ssh_connection and self.interface_var.get():
+            interface = self.interface_var.get()
+            ip_address = self.ip_addr_entry.get()
+            subnet_mask = self.subnet_entry.get()
+            
             try:
-                output = connection.send_command("show ip interface brief")
-                self.output_area.insert(tk.END, "Interface Status:\n" + output + "\n\n")
+                commands = [
+                    f"interface {interface}",
+                    f"ip address {ip_address} {subnet_mask}"
+                ]
+                self.ssh_connection.config_mode()
+                output = self.ssh_connection.send_config_set(commands)
+                self.ssh_connection.exit_config_mode()
+                messagebox.showinfo("Success", "IP configuration applied successfully!")
+                
             except Exception as e:
-                messagebox.showerror("Interface Error", f"Failed to retrieve interfaces: {e}")
-            finally:
-                connection.disconnect()
+                messagebox.showerror("Error", f"Failed to apply IP configuration: {str(e)}")
 
-    def show_ip_route(self):
-        connection = self.connect_router()
-        if connection:
-            try:
-                output = connection.send_command("show ip route")
-                self.output_area.insert(tk.END, "IP Routing Table:\n" + output + "\n\n")
-            except Exception as e:
-                messagebox.showerror("Route Error", f"Failed to retrieve IP routes: {e}")
-            finally:
-                connection.disconnect()
-
-    def clear_output(self):
-        self.output_area.delete(1.0, tk.END)
-
-    def initialize_interfaces(self):
-        connection = self.connect_router()
-        if connection:
-            try:
-                output = connection.send_command("show ip interface brief")
-                interfaces = self.parse_interfaces(output)
-                self.update_interface_menu(interfaces)
-                if interfaces:
-                    self.selected_interface.set(interfaces[0])  # Default to the first interface
-            except Exception as e:
-                messagebox.showerror("Interface Initialization Error", f"Failed to initialize interfaces: {e}")
-            finally:
-                connection.disconnect()
-
-    def parse_interfaces(self, output):
-        interfaces = []
-        lines = output.splitlines()[1:]  # Skip the header line
-        for line in lines:
-            parts = line.split()
-            if len(parts) > 1:
-                interfaces.append(parts[0])
-        return interfaces
-
-    def update_interface_menu(self, interfaces):
-        menu = self.intf_menu["menu"]
-        menu.delete(0, "end")
-        for interface in interfaces:
-            menu.add_command(label=interface, command=lambda value=interface: self.selected_interface.set(value))
-
-    def set_ip_address(self):
-        interface = self.selected_interface.get()
-        ip_address = self.ip_entry.get()
-        subnet_mask = self.mask_entry.get()
-        if interface and ip_address and subnet_mask:
-            connection = self.connect_router()
-            if connection:
-                try:
-                    connection.send_config_set([f"interface {interface}", f"ip address {ip_address} {subnet_mask}"])
-                    messagebox.showinfo("Success", f"IP address {ip_address} set on interface {interface}")
-                except Exception as e:
-                    messagebox.showerror("Configuration Error", f"Failed to set IP address: {e}")
-                finally:
-                    connection.disconnect()
-
-    def configure_dhcp(self):
-        pool_name = self.dhcp_pool_name_entry.get()
-        network = self.dhcp_network_entry.get()
-        subnet_mask = self.dhcp_subnet_mask_entry.get()
-        gateway = self.dhcp_gateway_entry.get()
-        dns = self.dhcp_dns_entry.get()
-        
-        if pool_name and network and subnet_mask:
-            connection = self.connect_router()
-            if connection:
-                try:
-                    commands = [
-                        f"ip dhcp pool {pool_name}",
-                        f"network {network} {subnet_mask}",
-                        f"default-router {gateway}" if gateway else "",
-                        f"dns-server {dns}" if dns else "",
-                    ]
-                    connection.send_config_set(commands)
-                    messagebox.showinfo("DHCP Config", "DHCP configuration applied successfully")
-                except Exception as e:
-                    messagebox.showerror("DHCP Error", f"Failed to apply DHCP configuration: {e}")
-                finally:
-                    connection.disconnect()
-
-class LoginWindow:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Login")
-
-        self.username_label = tk.Label(root, text="Username:")
-        self.username_label.grid(row=0, column=0, padx=10, pady=10)
-        self.username_entry = tk.Entry(root)
-        self.username_entry.grid(row=0, column=1, padx=10, pady=10)
-
-        self.password_label = tk.Label(root, text="Password:")
-        self.password_label.grid(row=1, column=0, padx=10, pady=10)
-        self.password_entry = tk.Entry(root, show="*")
-        self.password_entry.grid(row=1, column=1, padx=10, pady=10)
-
-        self.login_button = tk.Button(root, text="Login", command=self.check_login)
-        self.login_button.grid(row=2, column=1, padx=10, pady=10)
-
-    def check_login(self):
-        username = self.username_entry.get()
-        password = self.password_entry.get()
-        if username == "admin" and password == "admin":
-            self.root.withdraw()
-            main_root = tk.Toplevel(self.root)
-            app = CiscoGUI(main_root)
-        else:
-            messagebox.showerror("Login Error", "Invalid username or password")
-
-# Run the application
 if __name__ == "__main__":
     root = tk.Tk()
-    login_app = LoginWindow(root)
+    app = RouterConfigGUI(root)
     root.mainloop()

@@ -30,11 +30,13 @@ class RouterConfigGUI:
         self.interface_tab = ttk.Frame(self.notebook)
         self.dhcp_tab = ttk.Frame(self.notebook)
         self.time_tab = ttk.Frame(self.notebook)
+        self.blacklist_tab = ttk.Frame(self.notebook)
         
         self.notebook.add(self.connection_tab, text='Connection')
         self.notebook.add(self.interface_tab, text='Interface Config')
         self.notebook.add(self.dhcp_tab, text='DHCP')
         self.notebook.add(self.time_tab, text='Time Config')
+        self.notebook.add(self.blacklist_tab, text='Blacklist')
         
         # Connection Frame
         self.conn_frame = ttk.LabelFrame(self.connection_tab, text="SSH Connection", padding="10")
@@ -192,6 +194,44 @@ class RouterConfigGUI:
 
         # Initially hide manual frame
         self.manual_frame.pack_forget()
+    
+        # Create blacklist frame
+        self.blacklist_frame = ttk.LabelFrame(self.blacklist_tab, text="IP Blacklist", padding="10")
+        self.blacklist_frame.pack(fill='both', expand=True, padx=10, pady=5)
+        
+        # Blacklist listbox with scrollbar
+        list_frame = ttk.Frame(self.blacklist_frame)
+        list_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        self.blacklist_listbox = tk.Listbox(list_frame, height=10)
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.blacklist_listbox.yview)
+        self.blacklist_listbox.configure(yscrollcommand=scrollbar.set)
+        
+        self.blacklist_listbox.pack(side='left', fill='both', expand=True)
+        scrollbar.pack(side='right', fill='y')
+        
+        # Input frame
+        input_frame = ttk.Frame(self.blacklist_frame)
+        input_frame.pack(fill='x', padx=5, pady=5)
+        
+        ttk.Label(input_frame, text="IP Address:").pack(side='left', padx=5)
+        self.blacklist_ip_entry = ttk.Entry(input_frame)
+        self.blacklist_ip_entry.pack(side='left', padx=5)
+        
+        # Buttons frame
+        button_frame = ttk.Frame(self.blacklist_frame)
+        button_frame.pack(fill='x', padx=5, pady=5)
+        
+        ttk.Button(button_frame, text="Add to Blacklist", 
+                command=self.add_to_blacklist).pack(side='left', padx=5)
+        ttk.Button(button_frame, text="Remove Selected", 
+                command=self.remove_from_blacklist).pack(side='left', padx=5)
+        ttk.Button(button_frame, text="Refresh Blacklist", 
+                command=self.refresh_blacklist).pack(side='left', padx=5)
+        
+        # Status display
+        self.blacklist_status = scrolledtext.ScrolledText(self.blacklist_frame, height=5, width=50)
+        self.blacklist_status.pack(fill='x', padx=5, pady=5)
 
     def set_interface_frame_state(self, state):
         """Enable or disable interface configuration widgets"""
@@ -485,6 +525,104 @@ class RouterConfigGUI:
             messagebox.showinfo("Success", "Time set successfully")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to set time: {str(e)}")
+
+    def validate_ip(self, ip):
+        """Validate IP address format"""
+        try:
+            ipaddress.ip_address(ip)
+            return True
+        except ValueError:
+            return False
+
+    def add_to_blacklist(self):
+        """Add IP address to blacklist"""
+        ip = self.blacklist_ip_entry.get().strip()
+        if not self.validate_ip(ip):
+            messagebox.showerror("Error", "Invalid IP address format")
+            return
+        
+        if not self.ssh_connection:
+            messagebox.showerror("Error", "Not connected to router")
+            return
+        
+        try:
+            # Configure ACL
+            commands = [
+                'conf t',
+                'ip access-list extended BLACKLIST',
+                f'deny ip host {ip} any',
+                'permit ip any any',
+                'end'
+            ]
+            
+            output = self.ssh_connection.send_config_set(commands)
+            self.blacklist_status.insert(tk.END, f"Adding {ip} to blacklist...\n{output}\n")
+            self.blacklist_status.see(tk.END)
+            
+            # Apply ACL if not already applied
+            interfaces_output = self.ssh_connection.send_command('show ip interface brief')
+            for interface in interfaces_output.split('\n'):
+                if 'FastEthernet' in interface or 'GigabitEthernet' in interface:
+                    commands = [
+                        'conf t',
+                        f'interface {interface.split()[0]}',
+                        'ip access-group BLACKLIST in',
+                        'end'
+                    ]
+                    self.ssh_connection.send_config_set(commands)
+            
+            self.refresh_blacklist()
+            self.blacklist_ip_entry.delete(0, tk.END)
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to add IP to blacklist: {str(e)}")
+
+    def remove_from_blacklist(self):
+        """Remove selected IP from blacklist"""
+        selection = self.blacklist_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("Warning", "Please select an IP address to remove")
+            return
+        
+        ip = self.blacklist_listbox.get(selection[0]).split()[0]
+        
+        try:
+            commands = [
+                'conf t',
+                'ip access-list extended BLACKLIST',
+                f'no deny ip host {ip} any',
+                'end'
+            ]
+            
+            output = self.ssh_connection.send_config_set(commands)
+            self.blacklist_status.insert(tk.END, f"Removing {ip} from blacklist...\n{output}\n")
+            self.blacklist_status.see(tk.END)
+            
+            self.refresh_blacklist()
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to remove IP from blacklist: {str(e)}")
+
+    def refresh_blacklist(self):
+        """Refresh the blacklist display"""
+        if not self.ssh_connection:
+            messagebox.showerror("Error", "Not connected to router")
+            return
+        
+        try:
+            output = self.ssh_connection.send_command('show access-list BLACKLIST')
+            self.blacklist_listbox.delete(0, tk.END)
+            
+            for line in output.split('\n'):
+                if 'deny ip host' in line:
+                    ip = line.split('host')[1].split()[0]
+                    self.blacklist_listbox.insert(tk.END, f"{ip}")
+                    
+            self.blacklist_status.insert(tk.END, "Blacklist refreshed\n")
+            self.blacklist_status.see(tk.END)
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to refresh blacklist: {str(e)}")
 
 if __name__ == "__main__":
     root = tk.Tk()

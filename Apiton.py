@@ -31,12 +31,14 @@ class RouterConfigGUI:
         self.dhcp_tab = ttk.Frame(self.notebook)
         self.time_tab = ttk.Frame(self.notebook)
         self.blacklist_tab = ttk.Frame(self.notebook)
+        self.hostname_tab = ttk.Frame(self.notebook)
         
         self.notebook.add(self.connection_tab, text='Connection')
         self.notebook.add(self.interface_tab, text='Interface Config')
         self.notebook.add(self.dhcp_tab, text='DHCP')
         self.notebook.add(self.time_tab, text='Time Config')
         self.notebook.add(self.blacklist_tab, text='Blacklist')
+        self.notebook.add(self.hostname_tab, text='Hostname')
         
         # Connection Frame
         self.conn_frame = ttk.LabelFrame(self.connection_tab, text="SSH Connection", padding="10")
@@ -232,6 +234,46 @@ class RouterConfigGUI:
         # Status display
         self.blacklist_status = scrolledtext.ScrolledText(self.blacklist_frame, height=5, width=50)
         self.blacklist_status.pack(fill='x', padx=5, pady=5)
+            # Create hostname frame
+        self.hostname_frame = ttk.LabelFrame(self.hostname_tab, text="Router Hostname Configuration", padding="10")
+        self.hostname_frame.pack(fill='both', expand=True, padx=10, pady=5)
+        
+        # Current hostname display
+        current_hostname_frame = ttk.Frame(self.hostname_frame)
+        current_hostname_frame.pack(fill='x', padx=5, pady=5)
+        
+        ttk.Label(current_hostname_frame, text="Current Hostname:").pack(side='left', padx=5)
+        self.current_hostname_label = ttk.Label(current_hostname_frame, text="Not Connected")
+        self.current_hostname_label.pack(side='left', padx=5)
+        
+        # New hostname input
+        input_frame = ttk.Frame(self.hostname_frame)
+        input_frame.pack(fill='x', padx=5, pady=10)
+        
+        ttk.Label(input_frame, text="New Hostname:").pack(side='left', padx=5)
+        self.new_hostname_entry = ttk.Entry(input_frame)
+        self.new_hostname_entry.pack(side='left', padx=5, fill='x', expand=True)
+        
+        # Hostname requirements label
+        requirements_text = ("Hostname requirements:\n"
+                            "- Start with a letter\n"
+                            "- Contains only letters, numbers, and hyphens\n"
+                            "- Between 1 and 63 characters\n"
+                            "- Cannot end with a hyphen")
+        ttk.Label(self.hostname_frame, text=requirements_text, justify='left').pack(pady=10)
+        
+        # Buttons frame
+        button_frame = ttk.Frame(self.hostname_frame)
+        button_frame.pack(fill='x', padx=5, pady=5)
+        
+        ttk.Button(button_frame, text="Change Hostname", 
+                command=self.change_hostname).pack(side='left', padx=5)
+        ttk.Button(button_frame, text="Refresh Current Hostname", 
+                command=self.refresh_hostname).pack(side='left', padx=5)
+        
+        # Status display
+        self.hostname_status = scrolledtext.ScrolledText(self.hostname_frame, height=5, width=50)
+        self.hostname_status.pack(fill='x', padx=5, pady=5)
 
     def set_interface_frame_state(self, state):
         """Enable or disable interface configuration widgets"""
@@ -264,6 +306,9 @@ class RouterConfigGUI:
             # Get and populate interfaces
             self.get_interfaces()
             self.set_interface_frame_state('normal')
+
+            # Refresh the hostname
+            self.refresh_hostname()
             
             # Switch to interface tab
             self.notebook.select(1)
@@ -623,6 +668,80 @@ class RouterConfigGUI:
             
         except Exception as e:
             messagebox.showerror("Error", f"Failed to refresh blacklist: {str(e)}")
+
+    def validate_hostname(self, hostname):
+        """
+        Validate hostname according to Cisco IOS requirements
+        """
+        # Check if hostname is between 1 and 63 characters
+        if not (1 <= len(hostname) <= 63):
+            return False
+        
+        # Check if hostname starts with a letter
+        if not hostname[0].isalpha():
+            return False
+        
+        # Check if hostname contains only valid characters
+        if not re.match(r'^[a-zA-Z0-9-]+$', hostname):
+            return False
+        
+        # Check if hostname doesn't end with a hyphen
+        if hostname.endswith('-'):
+            return False
+        
+        return True
+
+    def change_hostname(self):
+        """Change the router's hostname"""
+        new_hostname = self.new_hostname_entry.get().strip()
+        
+        if not self.ssh_connection:
+            messagebox.showerror("Error", "Not connected to router")
+            return
+        
+        if not self.validate_hostname(new_hostname):
+            messagebox.showerror("Error", 
+                            "Invalid hostname. Please check the hostname requirements.")
+            return
+        
+        try:
+            # Configure new hostname
+            commands = [
+                'conf t',
+                f'hostname {new_hostname}',
+                'end'
+            ]
+            
+            output = self.ssh_connection.send_config_set(commands)
+            self.hostname_status.insert(tk.END, 
+                                    f"Changing hostname to {new_hostname}...\n{output}\n")
+            self.hostname_status.see(tk.END)
+            
+            # Refresh the displayed hostname
+            self.refresh_hostname()
+            self.new_hostname_entry.delete(0, tk.END)
+            
+            messagebox.showinfo("Success", f"Hostname changed to {new_hostname}")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to change hostname: {str(e)}")
+
+    def refresh_hostname(self):
+        """Refresh the current hostname display"""
+        if not self.ssh_connection:
+            messagebox.showerror("Error", "Not connected to router")
+            return
+        
+        try:
+            output = self.ssh_connection.send_command('show running-config | include hostname')
+            hostname = output.strip().split('hostname ')[-1] if output else "Unknown"
+            
+            self.current_hostname_label.config(text=hostname)
+            self.hostname_status.insert(tk.END, "Hostname refreshed\n")
+            self.hostname_status.see(tk.END)
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to refresh hostname: {str(e)}")
 
 if __name__ == "__main__":
     root = tk.Tk()

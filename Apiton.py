@@ -4,6 +4,9 @@ from tkinter import ttk
 from tkinter import messagebox
 import re
 import threading
+from tkinter import scrolledtext
+import ipaddress
+
 
 class DHCPPool:
     def __init__(self, name, network, mask, dns=None):
@@ -80,7 +83,68 @@ class RouterConfigGUI:
         self.apply_btn = ttk.Button(self.interface_frame, text="Apply IP Configuration", 
                                   command=self.apply_ip_config)
         self.apply_btn.grid(row=4, column=0, columnspan=2, pady=5)
+
+        # DHCP Frame
+        self.dhcp_frame = ttk.LabelFrame(self.dhcp_tab, text="DHCP Pool Configuration", padding="10")
+        self.dhcp_frame.pack(fill='both', expand=True, padx=10, pady=5)
         
+        # DHCP Pool List
+        self.pools_frame = ttk.LabelFrame(self.dhcp_frame, text="Configured Pools")
+        self.pools_frame.pack(fill='x', padx=5, pady=5)
+        
+        self.pool_listbox = tk.Listbox(self.pools_frame, height=5)
+        self.pool_listbox.pack(fill='x', padx=5, pady=5)
+        self.pool_listbox.bind('<<ListboxSelect>>', self.on_pool_select)
+        
+        # DHCP Configuration inputs
+        config_frame = ttk.Frame(self.dhcp_frame)
+        config_frame.pack(fill='x', padx=5, pady=5)
+        
+        ttk.Label(config_frame, text="Pool Name:").grid(row=0, column=0, sticky="w")
+        self.pool_name_entry = ttk.Entry(config_frame)
+        self.pool_name_entry.grid(row=0, column=1, padx=5, pady=2)
+        
+        ttk.Label(config_frame, text="Network Address:").grid(row=1, column=0, sticky="w")
+        self.network_entry = ttk.Entry(config_frame)
+        self.network_entry.grid(row=1, column=1, padx=5, pady=2)
+        
+        ttk.Label(config_frame, text="Subnet Mask:").grid(row=2, column=0, sticky="w")
+        self.dhcp_mask_entry = ttk.Entry(config_frame)
+        self.dhcp_mask_entry.grid(row=2, column=1, padx=5, pady=2)
+        
+        ttk.Label(config_frame, text="Default Gateway:").grid(row=3, column=0, sticky="w")
+        self.gateway_entry = ttk.Entry(config_frame)
+        self.gateway_entry.grid(row=3, column=1, padx=5, pady=2)
+        
+        ttk.Label(config_frame, text="DNS Servers:").grid(row=4, column=0, sticky="w")
+        self.dns_entry = ttk.Entry(config_frame)
+        self.dns_entry.grid(row=4, column=1, padx=5, pady=2)
+        
+        # Excluded addresses
+        ttk.Label(config_frame, text="Excluded Addresses:").grid(row=5, column=0, sticky="w")
+        self.excluded_entry = ttk.Entry(config_frame)
+        self.excluded_entry.grid(row=5, column=1, padx=5, pady=2)
+        
+        # Buttons frame
+        buttons_frame = ttk.Frame(self.dhcp_frame)
+        buttons_frame.pack(fill='x', padx=5, pady=5)
+        
+        self.create_pool_btn = ttk.Button(buttons_frame, text="Create/Update Pool", 
+                                        command=self.create_dhcp_pool)
+        self.create_pool_btn.pack(side='left', padx=5)
+        
+        self.delete_pool_btn = ttk.Button(buttons_frame, text="Delete Pool", 
+                                        command=self.delete_dhcp_pool)
+        self.delete_pool_btn.pack(side='left', padx=5)
+        
+        self.refresh_pools_btn = ttk.Button(buttons_frame, text="Refresh Pools", 
+                                        command=self.refresh_dhcp_pools)
+        self.refresh_pools_btn.pack(side='left', padx=5)
+        
+        # Status display
+        self.status_text = scrolledtext.ScrolledText(self.dhcp_frame, height=5, width=50)
+        self.status_text.pack(fill='x', padx=5, pady=5)
+
         # Initially disable interface configuration
         self.set_interface_frame_state('disabled')
 
@@ -88,6 +152,14 @@ class RouterConfigGUI:
         """Enable or disable interface configuration widgets"""
         for child in self.interface_frame.winfo_children():
             child.configure(state=state)
+
+    def set_dhcp_frame_state(self, state):
+        """Enable or disable DHCP configuration widgets"""
+        for child in self.dhcp_frame.winfo_children():
+            if isinstance(child, ttk.Frame) or isinstance(child, ttk.LabelFrame):
+                for subchild in child.winfo_children():
+                    if not isinstance(subchild, scrolledtext.ScrolledText):
+                        subchild.configure(state=state)
 
     def connect_to_router(self):
         """Establish SSH connection to the router"""
@@ -113,6 +185,10 @@ class RouterConfigGUI:
             
         except Exception as e:
             messagebox.showerror("Error", f"Failed to connect: {str(e)}")
+        if self.ssh_connection:
+            self.set_dhcp_frame_state('normal')
+            self.refresh_dhcp_pools()
+
 
     def get_interfaces(self):
         """Get available interfaces from router"""
@@ -122,6 +198,115 @@ class RouterConfigGUI:
             interfaces = [line.split()[0] for line in output.splitlines()[1:] 
                         if line.strip() and not line.startswith("Interface")]
             self.interface_dropdown['values'] = interfaces
+
+    def refresh_dhcp_pools(self):
+        """Refresh the list of DHCP pools from the router"""
+        if self.ssh_connection:
+            try:
+                output = self.ssh_connection.send_command("show ip dhcp pool")
+                self.pool_listbox.delete(0, tk.END)
+                
+                # Parse and display pools
+                current_pool = None
+                for line in output.splitlines():
+                    if line.startswith("Pool"):
+                        current_pool = line.split()[1]
+                        self.pool_listbox.insert(tk.END, current_pool)
+                
+                self.status_text.delete(1.0, tk.END)
+                self.status_text.insert(tk.END, "DHCP pools refreshed successfully\n")
+            except Exception as e:
+                self.status_text.insert(tk.END, f"Error refreshing pools: {str(e)}\n")
+
+    def on_pool_select(self, event):
+        """Handle pool selection from listbox"""
+        if not self.pool_listbox.curselection():
+            return
+            
+        selected_pool = self.pool_listbox.get(self.pool_listbox.curselection())
+        if self.ssh_connection:
+            try:
+                output = self.ssh_connection.send_command(f"show running-config | section ip dhcp pool {selected_pool}")
+                
+                # Clear existing entries
+                self.pool_name_entry.delete(0, tk.END)
+                self.network_entry.delete(0, tk.END)
+                self.dhcp_mask_entry.delete(0, tk.END)
+                self.gateway_entry.delete(0, tk.END)
+                self.dns_entry.delete(0, tk.END)
+                
+                # Parse and fill in pool details
+                self.pool_name_entry.insert(0, selected_pool)
+                
+                for line in output.splitlines():
+                    if "network" in line:
+                        parts = line.split()
+                        self.network_entry.insert(0, parts[1])
+                        self.dhcp_mask_entry.insert(0, parts[2])
+                    elif "default-router" in line:
+                        self.gateway_entry.insert(0, line.split()[1])
+                    elif "dns-server" in line:
+                        self.dns_entry.insert(0, ' '.join(line.split()[1:]))
+                        
+            except Exception as e:
+                self.status_text.insert(tk.END, f"Error loading pool details: {str(e)}\n")
+
+    def create_dhcp_pool(self):
+        """Create or update a DHCP pool"""
+        if not self.ssh_connection:
+            return
+            
+        try:
+            # Validate inputs
+            if not all([self.pool_name_entry.get(), self.network_entry.get(), 
+                    self.dhcp_mask_entry.get(), self.gateway_entry.get()]):
+                raise ValueError("Pool name, network, mask, and gateway are required")
+                
+            # Prepare commands
+            commands = [
+                f"ip dhcp pool {self.pool_name_entry.get()}",
+                f"network {self.network_entry.get()} {self.dhcp_mask_entry.get()}",
+                f"default-router {self.gateway_entry.get()}"
+            ]
+            
+            # Add DNS if specified
+            if self.dns_entry.get():
+                commands.append(f"dns-server {self.dns_entry.get()}")
+                
+            # Add excluded addresses if specified
+            if self.excluded_entry.get():
+                for addr in self.excluded_entry.get().split():
+                    commands.insert(0, f"ip dhcp excluded-address {addr}")
+                    
+            # Apply configuration
+            self.ssh_connection.config_mode()
+            output = self.ssh_connection.send_config_set(commands)
+            self.ssh_connection.exit_config_mode()
+            
+            self.status_text.insert(tk.END, "DHCP pool created/updated successfully\n")
+            self.refresh_dhcp_pools()
+            
+        except Exception as e:
+            self.status_text.insert(tk.END, f"Error creating DHCP pool: {str(e)}\n")
+
+    def delete_dhcp_pool(self):
+        """Delete selected DHCP pool"""
+        if not self.pool_listbox.curselection():
+            return
+            
+        selected_pool = self.pool_listbox.get(self.pool_listbox.curselection())
+        if messagebox.askyesno("Confirm Delete", f"Are you sure you want to delete pool '{selected_pool}'?"):
+            try:
+                commands = [f"no ip dhcp pool {selected_pool}"]
+                self.ssh_connection.config_mode()
+                output = self.ssh_connection.send_config_set(commands)
+                self.ssh_connection.exit_config_mode()
+                
+                self.status_text.insert(tk.END, f"DHCP pool '{selected_pool}' deleted successfully\n")
+                self.refresh_dhcp_pools()
+                
+            except Exception as e:
+                self.status_text.insert(tk.END, f"Error deleting pool: {str(e)}\n")
 
     def on_interface_select(self, event):
         """Handle interface selection"""

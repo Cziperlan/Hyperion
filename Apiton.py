@@ -29,10 +29,12 @@ class RouterConfigGUI:
         self.connection_tab = ttk.Frame(self.notebook)
         self.interface_tab = ttk.Frame(self.notebook)
         self.dhcp_tab = ttk.Frame(self.notebook)
+        self.time_tab = ttk.Frame(self.notebook)
         
         self.notebook.add(self.connection_tab, text='Connection')
         self.notebook.add(self.interface_tab, text='Interface Config')
         self.notebook.add(self.dhcp_tab, text='DHCP')
+        self.notebook.add(self.time_tab, text='Time Config')
         
         # Connection Frame
         self.conn_frame = ttk.LabelFrame(self.connection_tab, text="SSH Connection", padding="10")
@@ -147,6 +149,49 @@ class RouterConfigGUI:
 
         # Initially disable interface configuration
         self.set_interface_frame_state('disabled')
+
+        # Create the time configuration frame
+        self.time_frame = ttk.LabelFrame(self.time_tab, text="Time Configuration", padding="10")
+        self.time_frame.pack(fill='both', expand=True, padx=10, pady=5)
+
+        # Time configuration mode selection
+        self.time_mode = tk.StringVar(value="ntp")
+        ttk.Radiobutton(self.time_frame, text="NTP", variable=self.time_mode, 
+                        value="ntp", command=self.toggle_time_mode).pack(anchor="w", pady=2)
+        ttk.Radiobutton(self.time_frame, text="Manual", variable=self.time_mode, 
+                        value="manual", command=self.toggle_time_mode).pack(anchor="w", pady=2)
+
+        # NTP configuration frame
+        self.ntp_frame = ttk.LabelFrame(self.time_frame, text="NTP Configuration", padding="10")
+        self.ntp_frame.pack(fill='x', padx=5, pady=5)
+
+        ttk.Label(self.ntp_frame, text="NTP Server:").pack(anchor="w")
+        self.ntp_server_entry = ttk.Entry(self.ntp_frame)
+        self.ntp_server_entry.pack(fill='x', padx=5, pady=2)
+
+        self.ntp_btn = ttk.Button(self.ntp_frame, text="Configure NTP", 
+                                command=self.configure_ntp)
+        self.ntp_btn.pack(pady=5)
+
+        # Manual time configuration frame
+        self.manual_frame = ttk.LabelFrame(self.time_frame, text="Manual Time Configuration", 
+                                        padding="10")
+        self.manual_frame.pack(fill='x', padx=5, pady=5)
+
+        ttk.Label(self.manual_frame, text="Time (HH:MM:SS):").pack(anchor="w")
+        self.time_entry = ttk.Entry(self.manual_frame)
+        self.time_entry.pack(fill='x', padx=5, pady=2)
+
+        ttk.Label(self.manual_frame, text="Date (YYYY-MM-DD):").pack(anchor="w")
+        self.date_entry = ttk.Entry(self.manual_frame)
+        self.date_entry.pack(fill='x', padx=5, pady=2)
+
+        self.manual_btn = ttk.Button(self.manual_frame, text="Set Time", 
+                                command=self.set_manual_time)
+        self.manual_btn.pack(pady=5)
+
+        # Initially hide manual frame
+        self.manual_frame.pack_forget()
 
     def set_interface_frame_state(self, state):
         """Enable or disable interface configuration widgets"""
@@ -377,6 +422,69 @@ class RouterConfigGUI:
                 
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to apply IP configuration: {str(e)}")
+
+    def toggle_time_mode(self):
+        """Toggle between NTP and manual time configuration"""
+        if self.time_mode.get() == "ntp":
+            self.manual_frame.pack_forget()
+            self.ntp_frame.pack(fill='x', padx=5, pady=5)
+        else:
+            self.ntp_frame.pack_forget()
+            self.manual_frame.pack(fill='x', padx=5, pady=5)
+
+    def configure_ntp(self):
+        """Configure NTP on the router"""
+        if not self.ssh_connection:
+            messagebox.showerror("Error", "Not connected to router")
+            return
+
+        ntp_server = self.ntp_server_entry.get().strip()
+        if not ntp_server:
+            messagebox.showerror("Error", "Please enter NTP server address")
+            return
+
+        try:
+            commands = [
+                'conf t',
+                f'ntp server {ntp_server}',
+                'end'
+            ]
+            output = self.ssh_connection.send_config_set(commands)
+            messagebox.showinfo("Success", "NTP configuration applied successfully")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to configure NTP: {str(e)}")
+
+    def set_manual_time(self):
+        """Set manual time on the router"""
+        if not self.ssh_connection:
+            messagebox.showerror("Error", "Not connected to router")
+            return
+
+        time = self.time_entry.get().strip()
+        date = self.date_entry.get().strip()
+
+        if not time or not date:
+            messagebox.showerror("Error", "Please enter both time and date")
+            return
+
+        try:
+            # Format: clock set HH:MM:SS DD MONTH YYYY
+            date_parts = date.split('-')
+            if len(date_parts) != 3:
+                messagebox.showerror("Error", "Invalid date format. Use YYYY-MM-DD")
+                return
+
+            # Convert month number to name
+            months = ['January', 'February', 'March', 'April', 'May', 'June',
+                    'July', 'August', 'September', 'October', 'November', 'December']
+            month_name = months[int(date_parts[1]) - 1]
+
+            command = f'clock set {time} {date_parts[2]} {month_name} {date_parts[0]}'
+            output = self.ssh_connection.send_command_timing(command)
+            
+            messagebox.showinfo("Success", "Time set successfully")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to set time: {str(e)}")
 
 if __name__ == "__main__":
     root = tk.Tk()

@@ -57,8 +57,13 @@ class RouterConfigGUI:
         self.password_entry = ttk.Entry(self.conn_frame, show="*")
         self.password_entry.grid(row=2, column=1, padx=5, pady=2)
         
+        # Add Source IP input
+        ttk.Label(self.conn_frame, text="Source IP:").grid(row=3, column=0, sticky="w")
+        self.source_ip_entry = ttk.Entry(self.conn_frame)
+        self.source_ip_entry.grid(row=3, column=1, padx=5, pady=2)
+
         self.connect_btn = ttk.Button(self.conn_frame, text="Connect", command=self.connect_to_router)
-        self.connect_btn.grid(row=3, column=0, columnspan=2, pady=5)
+        self.connect_btn.grid(row=4, column=0, columnspan=2, pady=5)
         
         # Interface Frame
         self.interface_frame = ttk.Frame(self.interface_tab, padding="10")
@@ -296,8 +301,13 @@ class RouterConfigGUI:
                 'ip': self.ip_entry.get(),
                 'username': self.username_entry.get(),
                 'password': self.password_entry.get(),
-                'secret': self.password_entry.get()  # Using the same password for enable secret
+                'secret': self.password_entry.get(),  # Using the same password for enable secret
             }
+            
+            # Add source IP if specified
+            source_ip = self.source_ip_entry.get().strip()
+            if source_ip:
+                device['sock'] = self.create_socket_with_source_ip(self.ip_entry.get(), 22, source_ip)
             
             self.ssh_connection = ConnectHandler(**device)
             self.ssh_connection.enable()  # Enter enable mode
@@ -318,6 +328,16 @@ class RouterConfigGUI:
         if self.ssh_connection:
             self.set_dhcp_frame_state('normal')
             self.refresh_dhcp_pools()
+
+    def create_socket_with_source_ip(self, dest_ip, dest_port, source_ip):
+        """Create a socket with a specific source IP"""
+        import socket
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind((source_ip, 0))  # Bind to source IP with dynamic port
+        sock.connect((dest_ip, dest_port))
+        return sock
+
 
 
     def get_interfaces(self):
